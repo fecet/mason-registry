@@ -1,0 +1,18 @@
+---
+name: pylance
+description: Static type checker for Python.
+homepage: https://github.com/microsoft/pylance-release
+licenses:
+  - MIT
+languages:
+  - Python
+categories:
+  - LSP
+
+source:
+  id: pkg:npm/@delance/runtime@latest
+
+bin:
+  # pylance: npm:delance-langserver
+  # pylance: node:node_modules/azure-pipelines-language-server/out/server.js
+  pylance: node_modules/@delance/runtime/langserver.cjs
