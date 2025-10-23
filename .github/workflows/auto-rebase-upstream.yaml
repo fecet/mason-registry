@@ -1,0 +1,108 @@
+---
+name: Auto Rebase Upstream
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  rebase:
+    name: Rebase from Upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/mason-org/mason-registry.git || true
+          git fetch upstream
+
+      - name: Attempt rebase
+        id: rebase
+        run: |
+          # Try to rebase onto upstream/main
+          if git rebase upstream/main; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            # Abort the rebase to clean up
+            git rebase --abort
+            exit 1
+          fi
+
+      - name: Push changes
+        if: steps.rebase.outputs.status == 'success'
+        run: |
+          # Use force-with-lease to safely push
+          git push origin main --force-with-lease
+
+      - name: Create issue on failure
+        if: failure() && steps.rebase.outputs.status == 'failed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔄 Upstream Rebase Failed - Manual Intervention Required';
+            const body = `## Rebase Conflict Detected
+
+            The automated rebase from upstream failed due to conflicts.
+
+            ### Details
+            - **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - **Branch**: main
+            - **Upstream**: mason-org/mason-registry
+            - **Time**: ${new Date().toISOString()}
+
+            ### Next Steps
+            1. Review the [workflow run logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details
+            2. Manually rebase your fork:
+               \`\`\`bash
+               git fetch upstream
+               git rebase upstream/main
+               # Resolve conflicts
+               git rebase --continue
+               git push origin main --force-with-lease
+               \`\`\`
+            3. Close this issue once resolved
+
+            This issue was automatically created by the Auto Rebase Upstream workflow.`;
+
+            // Check if there's already an open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: ['auto-rebase-failed']
+            });
+
+            if (issues.data.length === 0) {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['auto-rebase-failed', 'automation']
+              });
+            } else {
+              // Comment on existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: `Another rebase failure occurred at ${new Date().toISOString()}\n\nWorkflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+              });
+            }
